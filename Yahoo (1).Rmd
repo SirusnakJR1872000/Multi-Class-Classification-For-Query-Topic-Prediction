@@ -1,0 +1,186 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+#loading the dataset
+```{r}
+yahoo <-read.csv("archive/test.csv", header = FALSE, stringsAsFactors = TRUE, sep = ",", dec = ".", strip.white=TRUE, fileEncoding="latin1")
+yahoo
+```
+#giving header to the dataset
+```{r}
+colnames(yahoo) <- c( "Class Index ", "Question Title", "Question Content", "Best Answer")
+yahoo
+```
+#checking the structure of the dataset
+```{r}
+str(yahoo)
+summary(yahoo)
+library(ggplot2)
+barplot(table(yahoo$`Class Index `), col = "palegreen4")
+x <- subset(yahoo, !complete.cases(yahoo))
+x
+
+```
+#combining the attributes "Question Title", "Question Content", "Best Answer" into one categorical column
+```{r}
+library(tidyr)
+yahoo <- unite(yahoo, col="Q&A", c("Question Title", "Question Content", "Best Answer"), sep = '    -----    ')
+yahoo
+```
+#checking for any missing values in the dataset
+```{r}
+sum(is.na(yahoo))
+key.table <- table(yahoo$`Class Index `, yahoo$`Q&A`)
+chisq.test(key.table)
+```
+
+#as we can see from the above chunk there are no missing values in the dataset
+
+
+#cleaning the data
+```{r}
+library(tm)
+corpus <- VCorpus(VectorSource(yahoo$`Q&A`))
+corpus
+```
+
+#removing various stopwords, punctuations , whitespaces and so on from the data
+```{r}
+library(tm)
+library(SnowballC)
+corpus_cle <- tm_map(corpus, content_transformer(tolower)) 
+corpus_cle <- tm_map(corpus_cle, stemDocument)
+corpus_cle <- tm_map(corpus_cle, removeWords, c("the", "and", "a", "or", stopwords("english")))
+corpus_cle <- tm_map(corpus_cle, removePunctuation)
+corpus_cle <- tm_map(corpus_cle, stripWhitespace)
+```
+
+#forming word cloud of the type from 1 to 10 
+```{r}
+library(wordcloud)
+library(RColorBrewer)
+wordcloud(corpus_cle, max.words = 100, type = 1)
+wordcloud(corpus_cle, max.words = 100, type = 2)
+wordcloud(corpus_cle, max.words = 100, type = 3)
+wordcloud(corpus_cle, max.words = 100, type = 4)
+wordcloud(corpus_cle, max.words = 100, type = 5)
+wordcloud(corpus_cle, max.words = 100, type = 6)
+wordcloud(corpus_cle, max.words = 100, type = 7)
+wordcloud(corpus_cle, max.words = 100, type = 8)
+wordcloud(corpus_cle, max.words = 100, type = 9)
+wordcloud(corpus_cle, max.words = 100, type = 10)
+```
+
+
+```{r}
+yah1_train <- yahoo[1:30000, ]
+yah1_validation <- yahoo[30001:40000, ]
+yah1_test <- yahoo[40001:60000, ]
+
+yah1_train_label = yah1_train$`Class Index `
+yah1_val_label = yah1_validation$`Class Index `
+yah1_test_label = yah1_test$`Class Index `
+
+```
+
+```{r}
+library(keras)
+text_vectorizer <- layer_text_vectorization(output_mode="tf_idf", ngrams =2, max_tokens = 5000)
+text_vectorizer%>%adapt(yah1_train$`Q&A`)
+yahoo1_train_dtm = text_vectorizer(yah1_train$`Q&A`) 
+yahoo1_validation_dtm =text_vectorizer(yah1_validation$`Q&A`) 
+yahoo1_test_dtm= text_vectorizer(yah1_test$`Q&A`)
+```
+
+```{r}
+model = keras_model_sequential()
+model %>%
+  layer_dense(units = 128, activation = 'relu', input_shape = dim(yahoo1_train_dtm)[2]) %>%
+  layer_dense(units = 10, activation = 'softmax')
+  
+model %>% compile(
+optimizer = 'adam', 
+loss = 'sparse_categorical_crossentropy',
+metrics = c('accuracy'))
+
+set.seed(111)
+
+history <- model %>% fit(yahoo1_train_dtm, yah1_train_label, epochs = 30, batch_size=100, validation_data=list(yahoo1_validation_dtm, yah1_val_label))
+```
+
+```{r}
+plot(history)
+model %>% evaluate(yahoo1_test_dtm, yah1_test_label)
+predicted_labels = as.numeric(model %>% predict(yahoo1_test_dtm) %>%k_argmax())
+predicted_labels
+```
+
+```{r}
+library(tfruns)
+library(keras)
+
+runs <- tuning_run("yahoo.R",
+  flags = list(
+  nodes = c(64, 128, 392),
+  learning_rate = c(0.01, 0.05, 0.001, 0.0001),
+  batch_size=c(100,200,500,1000),
+  epochs=c(30,50),
+  activation=c("relu","sigmoid","tanh")
+),
+sample = 0.02
+)
+```
+
+```{r}
+runs
+```
+
+```{r}
+view_run(runs$run_dir[4])
+```
+
+```{r}
+yahoo1_train_dtm <- as.matrix(yahoo1_train_dtm)
+yahoo1_validation_dtm <- as.matrix(yahoo1_validation_dtm)
+yahoo1_test_dtm <- as.matrix(yahoo1_test_dtm)
+new_train <- rbind(yahoo1_train_dtm, yahoo1_validation_dtm)
+yah1_train_label <- as.matrix(yah1_train_label)
+yah1_val_label <- as.matrix(yah1_val_label)
+yah1_test_label <- as.matrix(yah1_test_label)
+new_train_label <- rbind(yah1_train_label, yah1_val_label)
+```
+
+```{r}
+model =keras_model_sequential() 
+model %>%
+  layer_dense(units = 128, activation = 'tanh') %>%
+  layer_dense(units = 10, activation = 'softmax')
+
+model %>% compile(
+  optimizer = optimizer_adam(lr=0.05),
+  loss = 'sparse_categorical_crossentropy',
+  metrics = c('accuracy')
+)
+history <- model %>% fit(
+new_train, new_train_label, epochs = 50
+, batch_size= 1000,
+validation_data=list(yahoo1_test_dtm, yah1_test_label ))
+
+```
+
+```{r}
+library(caret)
+plot(history)
+predictions <- model %>% predict(yahoo1_test_dtm)
+predictions <- apply(predictions, 1, which.max)
+c.matrix <- confusionMatrix(as.factor(predictions), as.factor(yah1_test_label))
+c.matrix
+model %>% evaluate(yahoo1_test_dtm, yah1_test_label )
+```
+
+
+
+
